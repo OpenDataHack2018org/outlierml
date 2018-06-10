@@ -3,6 +3,7 @@
 import os
 import sys
 import getopt
+import warnings; warnings.simplefilter("ignore")
 import configparser
 import numpy as np
 import pandas as pd
@@ -26,7 +27,7 @@ def main(argv):
     -----------------------
     [outlierml]
     file          : NetCDF file path
-    method        : Local Outlier Factor (LOF), Robust Covariance (RC)
+    method        : Local Outlier Factor (LOF), Robust Covariance (RC), Isolation Forest (IF)
     outputdir     : Output directory
     contamination : Contamination fraction from 0 to 1
     """
@@ -88,7 +89,7 @@ def run_outlierml(nc,method,contamination,varname,latname,lonname,timname):
     """
     Program which detects outliers in xarray.dataset
     nc            : (xarray.Dataset)
-    method        : Local Outlier Factor (LOF), Robust Covariance (RC)
+    method        : Local Outlier Factor (LOF), Robust Covariance (RC), Isolation Forest (IF)
     contamination : Contamination fraction from 0 to 1
     varname       : (string) with varname label
     latname       : (string) with latitude label
@@ -114,7 +115,9 @@ def run_outlierml(nc,method,contamination,varname,latname,lonname,timname):
             if method == 'LOF':
                 myvec = localoutlierfactor(arr[:,j,i],contamination)
             elif method == 'RC':
-                myvec = localoutlierfactor(arr[:,j,i],contamination)
+                myvec = robustcovariance(arr[:,j,i],contamination)
+            elif method == 'IF':
+                myvec = isolationforest(arr[:,j,i],contamination)
             else:
                 sys.exit('ERROR: method not recognised should be <loc> or <rc>')
 
@@ -167,38 +170,42 @@ def read_csv(file):
     df = pd.read_csv(file)
     return df
 
-# def isolationforest(nparray):
+def isolationforest(nparray,contamination):
 
-#     """
-#     One efficient way of performing outlier detection in high-dimensional datasets
-#     is to use random forests. The ensemble.IsolationForest ‘isolates’ observations
-#     by randomly selecting a feature and then randomly selecting a split value between
-#     the maximum and minimum values of the selected feature.
+    """
+    One efficient way of performing outlier detection in high-dimensional datasets
+    is to use random forests. The ensemble.IsolationForest ‘isolates’ observations
+    by randomly selecting a feature and then randomly selecting a split value between
+    the maximum and minimum values of the selected feature.
 
-#     References:
-#     Liu, Fei Tony, Ting, Kai Ming and Zhou, Zhi-Hua. “Isolation forest.” Data Mining, 2008.
-#     ICDM‘08. Eighth IEEE International Conference on.
-#     """
+    References:
+    Liu, Fei Tony, Ting, Kai Ming and Zhou, Zhi-Hua. “Isolation forest.” Data Mining, 2008.
+    ICDM‘08. Eighth IEEE International Conference on.
+    """
 
-#     # Split data in training and testing
-#     train, test = train_test_split(series, test_size=0.66, random_state=rng)
+    df = pd.DataFrame(nparray)
 
-#     # Fit the model
-#     clf = IsolationForest(contamination=contamination, random_state=rng)
-#     clf.fit(train)
-#     y_pred_train = clf.predict(train)
-#     y_pred_test  = clf.predict(test)
+    rng = np.random.RandomState(42)
 
-#     train['IF'] = y_pred_train
-#     test['IF']  = y_pred_test
-#     tmp_df = pd.concat([train,test]).sort_index()
+    # Split data in training and testing
+    train, test = train_test_split(df, test_size=0.66, random_state=rng)
 
-#     series_chk['IF'] = tmp_df['IF']
+    # Fit the model
+    clf = IsolationForest(contamination=contamination, random_state=rng)
+    clf.fit(train)
+    y_pred_train = clf.predict(train)
+    y_pred_test  = clf.predict(test)
 
-#     ax = series_chk[series_chk['IF']==1]['value'].plot(style='.')
-#     series_chk[series_chk['IF']==-1]['value'].plot(style='.',ax=ax)
+    train['IF'] = y_pred_train
+    test['IF']  = y_pred_test
+    tmp_df = pd.concat([train,test]).sort_index()
+    y_pred = tmp_df['IF'].values
 
-#     return series_chk
+    # df['IF'] = y_pred
+    # ax = df[df['IF']==1]['value'].plot(style='.')
+    # df[df['IF']==-1]['value'].plot(style='.',ax=ax)
+
+    return y_pred
 
 def localoutlierfactor(nparray,contamination):
 
@@ -243,8 +250,8 @@ def robustcovariance(nparray,contamination):
 
     # Fit the model
     clf = EllipticEnvelope(contamination=contamination)
-    clf.fit(series)
-    y_pred = clf.predict(series)
+    clf.fit(df)
+    y_pred = clf.predict(df)
 
     y_pred[y_pred==1]  = 0
     y_pred[y_pred==-1] = 1
@@ -257,8 +264,11 @@ def robustcovariance(nparray,contamination):
 
 def seas_dec(ts_array):
 
-    result = seasonal_decompose(ts_array, model='multiplicative')
+    """
+    Decompotion of time series
+    """
 
+    result = seasonal_decompose(ts_array, model='multiplicative')
     return result.residual
 
 if __name__ == '__main__':
