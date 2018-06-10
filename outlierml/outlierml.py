@@ -41,6 +41,7 @@ def main(argv):
 
     file          = str(config.get('outlierml','file'))
     method        = str(config.get('outlierml','method'))
+    decomposition = str(config.get('outlierml','decomposition'))
     outputdir     = str(config.get('outlierml','outputdir'))
     contamination = np.float64(config.get('outlierml','contamination'))
 
@@ -78,13 +79,13 @@ def main(argv):
     else:
         sys.exit('ERROR: coordinate label should be <lon> or <longitude>')
 
-    csv,foo = run_outlierml(nc,method,contamination,varname,latname,lonname,timname)
+    csv,foo = run_outlierml(nc,method,contamination,varname,latname,lonname,timname,decomposition)
 
     # If command-line option is used two files are created log.csv and stats.nc
     csv.to_csv(outputdir+'log.csv')
     foo.to_netcdf(outputdir+'stats.nc',encoding={'myfreq': {'zlib': True},'mymean': {'zlib': True},'mystd': {'zlib': True}})
 
-def run_outlierml(nc,method,contamination,varname,latname,lonname,timname):
+def run_outlierml(nc,method,contamination,varname,latname,lonname,timname,decomposition):
 
     """
     Program which detects outliers in xarray.dataset
@@ -112,32 +113,44 @@ def run_outlierml(nc,method,contamination,varname,latname,lonname,timname):
         print(j)
         for i in range(res.shape[2]): # lon
 
+            if decomposition:
+                try:
+                    thearr = seas_dec(arr[:,j,i],nc[timname].values)
+                except ValueError:
+                    print('Multiplicative seasonality is not appropriate for zero and negative values')
+                    thearr = arr[:,j,i]
+            else:
+                thearr = arr[:,j,i]
+
             if method == 'LOF':
-                myvec = localoutlierfactor(arr[:,j,i],contamination)
+                myvec = localoutlierfactor(thearr,contamination)
             elif method == 'RC':
-                myvec = robustcovariance(arr[:,j,i],contamination)
+                myvec = robustcovariance(thearr,contamination)
             elif method == 'IF':
-                myvec = isolationforest(arr[:,j,i],contamination)
+                myvec = isolationforest(thearr,contamination)
             else:
                 sys.exit('ERROR: method not recognised should be <loc> or <rc>')
 
             res[:,j,i]     = myvec
             idx            = np.where(myvec>0)
+            
             dates          = nc.indexes['time'][idx].strftime('%Y-%m-%d')
             thelat         = nc[latname].values[j]
             thelon         = nc[lonname].values[i]
             theval         = np.squeeze(arr[idx,j,i])
             themean        = np.array(mymean[j,i])
             thestd         = np.array(mystd[j,i])
-            thecsv         = pd.DataFrame({'time':dates})
-            thecsv['lat']  = thelat
-            thecsv['lon']  = thelon
-            thecsv['ilat'] = j
-            thecsv['ilon'] = i
-            thecsv['val']  = theval
-            thecsv['mean'] = themean
-            thecsv['std']  = thestd
-            csv = pd.concat((csv,thecsv))
+
+            if len(idx)>0:
+                thecsv         = pd.DataFrame({'time':dates})
+                thecsv['lat']  = thelat
+                thecsv['lon']  = thelon
+                thecsv['ilat'] = j
+                thecsv['ilon'] = i
+                thecsv['val']  = theval
+                thecsv['mean'] = themean
+                thecsv['std']  = thestd
+                csv = pd.concat((csv,thecsv))
 
     # Setting index and saving csv
     csv.set_index(csv['time'],inplace=True)
@@ -262,14 +275,16 @@ def robustcovariance(nparray,contamination):
 
     return y_pred
 
-def seas_dec(ts_array):
+def seas_dec(ts_array,idx):
 
     """
-    Decompotion of time series
+    Decomposed time series
     """
 
-    result = seasonal_decompose(ts_array, model='multiplicative')
-    return result.residual
+    df = pd.DataFrame(ts_array,index=idx)
+    result = seasonal_decompose(df, model='multiplicative')
+
+    return np.squeeze(result.resid.fillna(method='ffill').fillna(method='bfill').values)
 
 if __name__ == '__main__':
     main(sys.argv[1:])
